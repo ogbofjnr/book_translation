@@ -1,6 +1,7 @@
 # book_translation
 
 CLI tool for translating selected EPUB chapters with DeepSeek.
+It keeps the original English text and adds translations in parentheses only for words/phrases above the configured CEFR threshold.
 
 The tool works in-place: it updates the original `.epub` file in `books/`.
 
@@ -22,7 +23,38 @@ TARGET_ENGLISH_LEVEL=B2
 ```
 
 - `TARGET_LANGUAGE` controls translation language inside parentheses (for example: `Russian`, `Spanish`, `German`).
-- `TARGET_ENGLISH_LEVEL` controls CEFR threshold. Words above this level are translated (for example: `B1`, `B2`, `C1`).
+- `TARGET_ENGLISH_LEVEL` controls CEFR threshold. Only words/phrases above this level are translated (for example: `B1`, `B2`, `C1`).
+
+Example behavior with:
+
+```env
+TARGET_LANGUAGE=Russian
+TARGET_ENGLISH_LEVEL=B2
+```
+
+Input:
+
+```text
+She felt a fleeting sense of melancholy, then smiled and kept walking.
+```
+
+Possible output:
+
+```text
+She felt a fleeting (мимолетное) sense of melancholy (меланхолии), then smiled and kept walking.
+```
+
+Input:
+
+```text
+He opened the door and sat at the table.
+```
+
+Possible output (no changes for simple words):
+
+```text
+He opened the door and sat at the table.
+```
 
 ## Make Commands
 
