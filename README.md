@@ -13,7 +13,7 @@ The tool works in-place: it updates the original `.epub` file in `books/`.
 
 ## Setup
 
-1. Put your book into `books/` (for example: `books/The Ecliptic (Benjamin Wood).epub`).
+1. Put your book into `books/` (for example: `books/example.epub`).
 2. Create `.env` (or export env var) with:
 
 ```env
