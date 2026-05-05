@@ -35,13 +35,13 @@ TARGET_ENGLISH_LEVEL=B2
 Input:
 
 ```text
-She felt a fleeting sense of melancholy, then smiled and kept walking.
+From the escarpment, we could just make out someone straining at the oars, a back hunched like a dune against the drizzle, the grey sea swaying all around.
 ```
 
 Possible output:
 
 ```text
-She felt a fleeting (мимолетное) sense of melancholy (меланхолии), then smiled and kept walking.
+From the escarpment (с уступа), we could just make out someone straining (напрягающегося) at the oars (вёслах), a back hunched (сгорбленная) like a dune (дюна) against the drizzle (морось), the grey sea swaying (колыхалось) all around.
 ```
 
 Input:
