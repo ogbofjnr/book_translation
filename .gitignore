@@ -1,0 +1,8 @@
+.env
+
+# Build artifacts
+book_translation
+epub-chapters
+
+# Optional debug output
+translations/debug/
