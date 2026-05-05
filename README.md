@@ -36,6 +36,11 @@ TARGET_ENGLISH_LEVEL=B2
   - Translates only chapter files whose EPUB path contains substring `08_One`
   - Writes result back to the same source file (in-place)
 
+- `make translate-all`
+  - Translates the whole book in one run
+  - Warning: this can take a long time on large books
+  - Recommended approach: translate chapter-by-chapter with `make translate CHAPTER="..."`
+
 Optional:
 
 - `BOOK="books/Your Book.epub"` to select a specific book file
@@ -47,6 +52,8 @@ make list
 make list BOOK="books/Your Book.epub"
 make translate CHAPTER="08_One"
 make translate BOOK="books/Your Book.epub" CHAPTER="12_Five"
+make translate-all
+make translate-all BOOK="books/Your Book.epub"
 ```
 
 ## Progress Logs
