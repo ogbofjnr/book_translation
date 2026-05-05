@@ -1,0 +1,254 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f1218;
+  --card: #171c24;
+  --line: #283242;
+  --text: #e6ecf4;
+  --muted: #9ba7b8;
+  --accent: #5ea6ff;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Inter, system-ui, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar h1 { font-size: 18px; margin: 0; }
+.spacer { flex: 1; }
+
+.shell {
+  display: grid;
+  grid-template-columns: 330px 1fr;
+  height: calc(100vh - 56px);
+}
+
+.shell.collapsed {
+  grid-template-columns: 1fr;
+}
+
+.sidebar {
+  border-right: 1px solid var(--line);
+  padding: 12px;
+  overflow: auto;
+}
+
+.shell.collapsed .sidebar {
+  display: none;
+}
+
+.panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.panel h2 { margin: 0 0 10px; font-size: 15px; }
+
+input, button {
+  width: 100%;
+  margin-top: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #111722;
+  color: var(--text);
+  padding: 10px;
+}
+select {
+  width: 100%;
+  margin-top: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #111722;
+  color: var(--text);
+  padding: 10px;
+}
+button {
+  background: #1c2a3f;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+.ghost {
+  width: auto;
+  padding: 6px 10px;
+  margin: 0;
+}
+
+.booksList {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bookItem {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.bookOpenBtn {
+  text-align: left;
+  background: #131a25;
+}
+
+.bookMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bookPercent {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 34px;
+  text-align: right;
+}
+
+.bookDeleteBtn {
+  width: auto;
+  margin: 0;
+  padding: 6px 8px;
+  background: #3a1b24;
+  border-color: #5a2c39;
+}
+
+.dropZone {
+  margin-top: 6px;
+  width: 100%;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: #111722;
+  color: var(--muted);
+  min-height: 74px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px;
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease, background .15s ease;
+}
+
+.dropZone:hover,
+.dropZone.dragOver {
+  border-color: var(--accent);
+  color: var(--text);
+  background: #162236;
+}
+
+.dropZone input[type="file"] {
+  display: none;
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--text);
+}
+
+.toggleRow input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.readerPane {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+}
+
+.readerHeader {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.readerHeader h2 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.reader {
+  padding: 0;
+  overflow: hidden;
+  height: 100%;
+  background: #ffffff;
+  color: #111111;
+}
+
+.pageNav {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pageNav button {
+  width: 100%;
+  margin-top: 0;
+}
+
+.reader iframe {
+  width: 100% !important;
+  height: 100% !important;
+  border: 0;
+  background: #ffffff !important;
+}
+.statusText {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sliderWrap {
+  margin-top: 10px;
+}
+.sliderHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.markers {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  font-size: 12px;
+  color: var(--muted);
+}
+.help {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.userLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+.userLabel input {
+  width: 140px;
+  margin: 0;
+  padding: 6px 8px;
+}

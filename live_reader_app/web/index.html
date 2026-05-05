@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live Reader MVP</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <button id="toggleSidebarBtn" class="ghost">☰</button>
+      <h1>Live Reader MVP</h1>
+      <div class="spacer"></div>
+      <label class="userLabel">
+        User:
+        <input id="userInput" value="local-user" />
+      </label>
+    </header>
+
+    <main id="appShell" class="shell">
+      <aside id="sidebar" class="sidebar">
+        <section class="panel">
+          <h2>Books</h2>
+          <form id="uploadForm">
+            <label id="dropZone" class="dropZone">
+              <input id="bookFileInput" type="file" accept=".epub" />
+              <span>Drop EPUB here or click to choose</span>
+            </label>
+          </form>
+          <ul id="booksList" class="booksList"></ul>
+        </section>
+
+        <section class="panel">
+          <h2>Translation</h2>
+          <label>
+            Target language
+            <input id="languageInput" value="Russian" />
+          </label>
+
+          <div class="sliderWrap">
+            <div class="sliderHeader">
+              <span>CEFR threshold</span>
+              <strong id="thresholdLabel">B2</strong>
+            </div>
+            <input id="thresholdSlider" type="range" min="0" max="5" step="1" value="3" />
+            <div class="markers">
+              <span>A1</span><span>A2</span><span>B1</span><span>B2</span><span>C1</span><span>C2</span>
+            </div>
+          </div>
+          <p class="help">Words above selected level are annotated.</p>
+          <label class="toggleRow">
+            <input id="autoTranslateToggle" type="checkbox" />
+            <span>Auto translate</span>
+          </label>
+          <div class="pageNav">
+            <button id="prevPageBtn">Previous</button>
+            <button id="nextPageBtn">Next</button>
+          </div>
+          <button id="tocJumpBtn">Table of contents</button>
+          <p class="help">Use keyboard arrows: ← previous, → next.</p>
+        </section>
+
+        <section class="panel">
+          <h2>Reader Settings</h2>
+          <label>
+            Font size
+            <input id="fontSizeSlider" type="range" min="80" max="180" step="5" value="100" />
+          </label>
+          <div class="sliderHeader">
+            <span>Current</span>
+            <strong id="fontSizeLabel">100%</strong>
+          </div>
+          <label>
+            Theme
+            <select id="themeSelect">
+              <option value="light">Light</option>
+              <option value="sepia">Sepia</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+        </section>
+
+      </aside>
+
+      <section class="readerPane">
+        <div class="readerHeader">
+          <h2 id="activeBookTitle">No book selected</h2>
+          <span id="statusText" class="statusText"></span>
+        </div>
+        <div id="reader" class="reader"></div>
+      </section>
+    </main>
+
+    <script src="/jszip.min.js"></script>
+    <script src="https://unpkg.com/epubjs/dist/epub.js"></script>
+    <script src="/app.js"></script>
+  </body>
+  </html>
