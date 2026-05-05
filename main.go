@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -35,6 +36,8 @@ const (
 	defaultChunkRunes     = 1700
 	defaultRequestTimeout = 90 * time.Second
 	defaultPauseBetween   = 400 * time.Millisecond
+	defaultTargetLanguage = "Russian"
+	defaultCEFRThreshold  = "B2"
 )
 
 type deepseekRequest struct {
@@ -69,8 +72,12 @@ type translator struct {
 	debugDir    string
 	epubOnly    string
 	parallel    int
+	targetLang  string
+	cefrStart   string
 
 	hadAPICallInCurrentHTML bool
+	totalChunks             int32
+	doneChunks              int32
 }
 
 func main() {
@@ -78,7 +85,9 @@ func main() {
 
 	inputFile := flag.String("input", "", "Process a single book file (overrides scanning input-dir)")
 	inputDir := flag.String("input-dir", "books", "Directory with source books")
-	outputDir := flag.String("output-dir", "translations", "Directory for translated books")
+	outputDir := flag.String("output-dir", "books", "Directory for translated books when not using --in-place")
+	inPlace := flag.Bool("in-place", true, "Overwrite input book in place")
+	listOnly := flag.Bool("list", false, "List EPUB chapters in reading order with translation status and exit")
 	apiKeyFlag := flag.String("api-key", "", "DeepSeek API key. If empty, DEEPSEEK_API_KEY is used")
 	model := flag.String("model", defaultModel, "DeepSeek model name")
 	chunkRunes := flag.Int("chunk-runes", defaultChunkRunes, "Max rune length for one API request")
@@ -90,6 +99,17 @@ func main() {
 	epubOnly := flag.String("epub-only", "", "Translate only EPUB HTML files whose path contains this substring (case-insensitive)")
 	parallel := flag.Int("parallel", 10, "Max concurrent DeepSeek requests per text node (1 = sequential). On any error, the book is not saved.")
 	flag.Parse()
+
+	if *listOnly {
+		bookPath, err := resolveInputBook(*inputFile, *inputDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := listEPUBChapters(bookPath); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	apiKey := strings.TrimSpace(*apiKeyFlag)
 	if apiKey == "" {
@@ -111,6 +131,15 @@ func main() {
 		par = 32
 	}
 
+	targetLang := strings.TrimSpace(os.Getenv("TARGET_LANGUAGE"))
+	if targetLang == "" {
+		targetLang = defaultTargetLanguage
+	}
+	cefrStart := strings.ToUpper(strings.TrimSpace(os.Getenv("TARGET_ENGLISH_LEVEL")))
+	if cefrStart == "" {
+		cefrStart = defaultCEFRThreshold
+	}
+
 	t := &translator{
 		apiKey:      apiKey,
 		model:       *model,
@@ -122,6 +151,8 @@ func main() {
 		debugDir:    strings.TrimSpace(*debugDir),
 		epubOnly:    strings.ToLower(strings.TrimSpace(*epubOnly)),
 		parallel:    par,
+		targetLang:  targetLang,
+		cefrStart:   cefrStart,
 	}
 
 	if !*debugEnabled {
@@ -169,12 +200,123 @@ func main() {
 	for _, path := range candidates {
 		t.chunkIndex = 0
 		log.Printf("processing: %s", path)
-		if err := processBook(path, *outputDir, t); err != nil {
+		if err := processBook(path, *outputDir, *inPlace, t); err != nil {
 			log.Printf("failed: %v", err)
 			continue
 		}
 		log.Printf("done: %s", path)
 	}
+}
+
+func resolveInputBook(inputFile, inputDir string) (string, error) {
+	if strings.TrimSpace(inputFile) != "" {
+		p := filepath.Clean(inputFile)
+		ext := strings.ToLower(filepath.Ext(p))
+		if ext != ".epub" {
+			return "", fmt.Errorf("list mode supports only .epub files, got: %s", ext)
+		}
+		if _, err := os.Stat(p); err != nil {
+			return "", fmt.Errorf("input file: %w", err)
+		}
+		return p, nil
+	}
+
+	files, err := os.ReadDir(inputDir)
+	if err != nil {
+		return "", fmt.Errorf("read input dir: %w", err)
+	}
+	var candidates []string
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(f.Name()), ".epub") {
+			candidates = append(candidates, filepath.Join(inputDir, f.Name()))
+		}
+	}
+	sort.Strings(candidates)
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no .epub files found in %s", inputDir)
+	}
+	return candidates[0], nil
+}
+
+func listEPUBChapters(inputPath string) error {
+	if !strings.EqualFold(filepath.Ext(inputPath), ".epub") {
+		return fmt.Errorf("list mode supports only .epub files")
+	}
+
+	zr, err := zip.OpenReader(inputPath)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	var opfPath string
+	var opfFile *zip.File
+	for _, f := range zr.File {
+		if strings.HasSuffix(strings.ToLower(f.Name), ".opf") {
+			opfPath = f.Name
+			opfFile = f
+			break
+		}
+	}
+	if opfFile == nil {
+		return fmt.Errorf("opf not found in %s", inputPath)
+	}
+
+	order := parseEPUBSpineOrder(opfFile)
+	if len(order) == 0 {
+		return fmt.Errorf("no chapters found in spine")
+	}
+
+	translated := loadTranslatedChapterSet(inputPath)
+	opfDir := path.Dir(opfPath)
+
+	fmt.Printf("Book: %s\n", filepath.Base(inputPath))
+	fmt.Printf("Mode: in-place update\n\n")
+	for i, rel := range order {
+		chapterPath := epubNormZipPath(path.Clean(path.Join(opfDir, rel)))
+		mark := "[ ]"
+		if translated[chapterPath] {
+			mark = "[x]"
+		}
+		fmt.Printf("%2d. %s %s\n", i+1, mark, chapterPath)
+	}
+	return nil
+}
+
+func loadTranslatedChapterSet(bookPath string) map[string]bool {
+	out := map[string]bool{}
+	if _, err := os.Stat(bookPath); err != nil {
+		return out
+	}
+
+	zr, err := zip.OpenReader(bookPath)
+	if err != nil {
+		return out
+	}
+	defer zr.Close()
+
+	for _, f := range zr.File {
+		if !strings.HasSuffix(strings.ToLower(f.Name), ".opf") {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return out
+		}
+		data, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			return out
+		}
+		for _, p := range parseTranslatedChaptersMeta(string(data)) {
+			out[epubNormZipPath(p)] = true
+		}
+		return out
+	}
+	return out
 }
 
 func loadDotEnv(path string) error {
@@ -208,16 +350,19 @@ func loadDotEnv(path string) error {
 	return nil
 }
 
-func processBook(inputPath, outputDir string, t *translator) error {
+func processBook(inputPath, outputDir string, inPlace bool, t *translator) error {
 	ext := strings.ToLower(filepath.Ext(inputPath))
-	baseNoExt := strings.TrimSuffix(filepath.Base(inputPath), ext)
-	lowerBase := strings.ToLower(baseNoExt)
-	stem := baseNoExt
-	if strings.HasSuffix(lowerBase, "_translated") {
-		stem = baseNoExt[:len(baseNoExt)-len("_translated")]
+	outputPath := inputPath
+	if !inPlace {
+		baseNoExt := strings.TrimSuffix(filepath.Base(inputPath), ext)
+		lowerBase := strings.ToLower(baseNoExt)
+		stem := baseNoExt
+		if strings.HasSuffix(lowerBase, "_translated") {
+			stem = baseNoExt[:len(baseNoExt)-len("_translated")]
+		}
+		outputBase := stem + "_translated"
+		outputPath = filepath.Join(outputDir, outputBase+ext)
 	}
-	outputBase := stem + "_translated"
-	outputPath := filepath.Join(outputDir, outputBase+ext)
 
 	switch ext {
 	case ".fb2":
@@ -288,12 +433,25 @@ func processEPUB(inputPath, outputPath string, t *translator) error {
 	}
 	defer reader.Close()
 
+	estimatedChunks, err := estimateEPUBChunks(reader.File, t)
+	if err != nil {
+		return fmt.Errorf("estimate epub chunks: %w", err)
+	}
+	if estimatedChunks > 0 {
+		log.Printf("estimated chunks to process: %d", estimatedChunks)
+	} else {
+		log.Printf("estimated chunks to process: 0")
+	}
+	atomic.StoreInt32(&t.totalChunks, int32(estimatedChunks))
+	atomic.StoreInt32(&t.doneChunks, 0)
+
 	tmp, err := os.CreateTemp(filepath.Dir(outputPath), ".epub-out-*")
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
 	_ = tmp.Close()
+	cleanupOldEPUBTemps(filepath.Dir(outputPath), tmpPath)
 
 	outFile, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -383,6 +541,115 @@ func processEPUB(inputPath, outputPath string, t *translator) error {
 	}
 	success = true
 	return nil
+}
+
+func cleanupOldEPUBTemps(dir, keepPath string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	keepAbs, err := filepath.Abs(keepPath)
+	if err != nil {
+		keepAbs = keepPath
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, ".epub-out-") {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		pAbs, err := filepath.Abs(p)
+		if err != nil {
+			pAbs = p
+		}
+		if pAbs == keepAbs {
+			continue
+		}
+		_ = os.Remove(p)
+	}
+}
+
+func estimateEPUBChunks(files []*zip.File, t *translator) (int, error) {
+	total := 0
+	for _, f := range orderedEPUBFiles(files) {
+		nameLower := strings.ToLower(f.Name)
+		if !(strings.HasSuffix(nameLower, ".xhtml") || strings.HasSuffix(nameLower, ".html") || strings.HasSuffix(nameLower, ".htm")) {
+			continue
+		}
+		if isServiceHTMLByName(nameLower) || !t.allowEPUBFile(nameLower) {
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return 0, err
+		}
+		content, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			return 0, err
+		}
+
+		n, err := estimateHTMLChunks(content, t.chunkRunes)
+		if err != nil {
+			return 0, fmt.Errorf("%s: %w", f.Name, err)
+		}
+		total += n
+	}
+
+	if t.maxChunks > 0 {
+		remaining := t.maxChunks - t.chunkIndex
+		if remaining < 0 {
+			remaining = 0
+		}
+		if total > remaining {
+			total = remaining
+		}
+	}
+
+	return total, nil
+}
+
+func estimateHTMLChunks(content []byte, chunkRunes int) (int, error) {
+	doc, err := html.Parse(bytes.NewReader(content))
+	if err != nil {
+		return 0, err
+	}
+
+	body := findFirstElement(doc, atom.Body)
+	if body == nil {
+		return 0, nil
+	}
+
+	count := 0
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n == nil {
+			return
+		}
+		if n.Type == html.ElementNode && shouldSkipElement(n) {
+			return
+		}
+		if n.Type == html.TextNode {
+			raw := n.Data
+			if strings.TrimSpace(raw) != "" && shouldTranslateTextNode(n) {
+				for _, s := range splitByRunes(raw, chunkRunes) {
+					core, _, _ := splitEdgeWhitespace(s)
+					if strings.TrimSpace(core) != "" {
+						count++
+					}
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(body)
+	return count, nil
 }
 
 func processMOBI(inputPath, outputPath string, t *translator) error {
@@ -641,13 +908,24 @@ func (t *translator) translateText(input string) (string, error) {
 
 	if t.parallel <= 1 {
 		for _, j := range jobs {
-			log.Printf("translating chunk %d", j.chunkNum)
+			total := atomic.LoadInt32(&t.totalChunks)
+			if total > 0 {
+				log.Printf("translating chunk %d out of %d", j.chunkNum, total)
+			} else {
+				log.Printf("translating chunk %d", j.chunkNum)
+			}
 			translatedCore, err := t.translateChunk(j.core, j.chunkNum)
 			if err != nil {
 				return "", err
 			}
 			t.hadAPICallInCurrentHTML = true
 			outs[j.segIdx] = j.leadWS + translatedCore + j.tailWS
+			doneNow := atomic.AddInt32(&t.doneChunks, 1)
+			if total > 0 {
+				log.Printf("chunk done %d out of %d", doneNow, total)
+			} else {
+				log.Printf("chunk done %d", doneNow)
+			}
 			time.Sleep(t.pause)
 		}
 		return strings.Join(outs, ""), nil
@@ -662,7 +940,12 @@ func (t *translator) translateText(input string) (string, error) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			log.Printf("translating chunk %d (parallel)", j.chunkNum)
+			total := atomic.LoadInt32(&t.totalChunks)
+			if total > 0 {
+				log.Printf("translating chunk %d out of %d", j.chunkNum, total)
+			} else {
+				log.Printf("translating chunk %d (parallel)", j.chunkNum)
+			}
 			translatedCore, err := t.translateChunk(j.core, j.chunkNum)
 			if err != nil {
 				return err
@@ -671,6 +954,12 @@ func (t *translator) translateText(input string) (string, error) {
 			t.hadAPICallInCurrentHTML = true
 			outs[j.segIdx] = j.leadWS + translatedCore + j.tailWS
 			mu.Unlock()
+			doneNow := atomic.AddInt32(&t.doneChunks, 1)
+			if total > 0 {
+				log.Printf("chunk done %d out of %d", doneNow, total)
+			} else {
+				log.Printf("chunk done %d", doneNow)
+			}
 			time.Sleep(t.pause)
 			return nil
 		})
@@ -682,20 +971,21 @@ func (t *translator) translateText(input string) (string, error) {
 }
 
 func (t *translator) translateChunk(text string, chunkNumber int) (string, error) {
-	systemPrompt := `You are a careful literary editor.
-Task: keep the original English text exactly, and only add Russian translations in parentheses for words/phrases that are ABOVE CEFR B2 level.
+	systemPrompt := fmt.Sprintf(`You are a careful literary editor.
+Task: keep the original English text exactly, and only add %s translations in parentheses for words/phrases that are ABOVE CEFR %s level.
 Rules:
 1) Preserve all original words, punctuation, line breaks, spacing, and order.
 2) Do NOT rewrite or paraphrase sentences.
-3) Insert translations only where needed by context, as: difficult_word (один самый подходящий русский перевод по контексту).
-4) In each pair of parentheses, provide exactly one Russian meaning (no synonyms, no alternatives, no comma-separated variants).
+3) Insert translations only where needed by context, as: difficult_word (one best %s meaning by context).
+4) In each pair of parentheses, provide exactly one %s meaning (no synonyms, no alternatives, no comma-separated variants).
 5) The translation must be literary and context-aware: choose the meaning that fits the whole sentence tone and sense, not a literal dictionary gloss.
-6) Prefer natural Russian wording that a human literary translator would choose in this context.
-7) The Russian meaning must be grammatically compatible with the local phrase/sentence role (part of speech, number, case, and natural collocation).
+6) Prefer natural %s wording that a human literary translator would choose in this context.
+7) The %s meaning must be grammatically compatible with the local phrase/sentence role (part of speech, number, case, and natural collocation).
 8) Avoid bare lemma-style glosses if a context-shaped form is needed.
-9) Keep names and simple B2-or-lower words untouched.
-10) Before finalizing, run a second pass over ALL inserted translations and verify each chosen Russian meaning is the best fit for its exact local context; if not, replace it with the correct one.
-11) Output ONLY the transformed text, with no explanations.`
+9) Keep names and simple %s-or-lower words untouched.
+10) Before finalizing, run a second pass over ALL inserted translations and verify each chosen %s meaning is the best fit for its exact local context; if not, replace it with the correct one.
+11) Output ONLY the transformed text, with no explanations.`,
+		t.targetLang, t.cefrStart, t.targetLang, t.targetLang, t.targetLang, t.targetLang, t.cefrStart, t.targetLang)
 
 	userPrompt := "Process this text:\n\n" + text
 	t.dumpDebugChunk(chunkNumber, "system_prompt.txt", systemPrompt)
