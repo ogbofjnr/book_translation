@@ -44,18 +44,6 @@ Possible output:
 From the escarpment (с уступа), we could just make out someone straining (напрягающегося) at the oars (вёслах), a back hunched (сгорбленная) like a dune (дюна) against the drizzle (морось), the grey sea swaying (колыхалось) all around.
 ```
 
-Input:
-
-```text
-He opened the door and sat at the table.
-```
-
-Possible output (no changes for simple words):
-
-```text
-He opened the door and sat at the table.
-```
-
 ## Make Commands
 
 - `make list`
