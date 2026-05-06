@@ -18,8 +18,8 @@ New standalone localhost MVP for live EPUB reading + on-demand page annotation.
 2. Start:
 
 ```bash
-go mod tidy
-go run .
+make deps
+make run
 ```
 
 3. Open `http://localhost:8080`.

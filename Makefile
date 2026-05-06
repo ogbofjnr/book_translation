@@ -4,13 +4,14 @@ BOOK ?=
 CHAPTER ?=
 INPUT_ARG := $(if $(BOOK),--input "$(BOOK)",--input-dir "$(INPUT_DIR)")
 
-.PHONY: help list translate translate-all
+.PHONY: help list translate translate-all reader
 
 help:
 	@echo "Usage:"
 	@echo "  make list [BOOK=books/file.epub]"
 	@echo "  make translate CHAPTER=\"chapter-substring\" [BOOK=books/file.epub]"
 	@echo "  make translate-all [BOOK=books/file.epub]"
+	@echo "  make reader"
 	@echo ""
 	@echo "Note: translate-all can take a long time. Recommended: translate by chapters."
 
@@ -25,3 +26,6 @@ translate-all:
 	@echo "Warning: full-book translation can take a long time."
 	@echo "Tip: recommended flow is chapter-by-chapter with make translate CHAPTER=\"...\""
 	@$(APP) $(INPUT_ARG)
+
+reader:
+	@go run ./live_reader_app

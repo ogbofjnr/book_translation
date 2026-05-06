@@ -1,4 +1,5 @@
 const levels = ["A1", "A2", "B1", "B2", "C1", "C2"];
+const BOOST_PARALLEL = 20;
 
 const state = {
   books: [],
@@ -15,6 +16,7 @@ const state = {
   userNavigatedAt: 0,
   suppressAutoTranslateUntil: 0,
   savePosTimer: null,
+  bootstrapBurstPending: false,
 };
 
 const els = {
@@ -36,8 +38,6 @@ const els = {
   fontSizeSlider: document.getElementById("fontSizeSlider"),
   fontSizeLabel: document.getElementById("fontSizeLabel"),
   themeSelect: document.getElementById("themeSelect"),
-  prevPageBtn: document.getElementById("prevPageBtn"),
-  nextPageBtn: document.getElementById("nextPageBtn"),
   tocJumpBtn: document.getElementById("tocJumpBtn"),
 };
 
@@ -71,24 +71,16 @@ els.themeSelect.addEventListener("change", () => {
 els.autoTranslateToggle.addEventListener("change", () => {
   saveUISettings();
   if (els.autoTranslateToggle.checked) {
-    scheduleAutoTranslate(150);
+    // Force immediate translation for the currently visible page when toggled on.
+    state.lastAppliedKey = "";
+    state.userNavigatedAt = Date.now();
+    state.bootstrapBurstPending = true;
+    scheduleAutoTranslate(50);
   } else {
     if (state.autoTranslateTimer) clearTimeout(state.autoTranslateTimer);
     if (state.translateController) state.translateController.abort();
     els.statusText.textContent = "Auto translate disabled.";
   }
-});
-
-els.prevPageBtn.addEventListener("click", async () => {
-  if (!state.rendition) return;
-  state.userNavigatedAt = Date.now();
-  state.rendition.prev();
-});
-
-els.nextPageBtn.addEventListener("click", async () => {
-  if (!state.rendition) return;
-  state.userNavigatedAt = Date.now();
-  state.rendition.next();
 });
 
 els.tocJumpBtn.addEventListener("click", async () => {
@@ -131,11 +123,12 @@ els.dropZone.addEventListener("drop", async (e) => {
   await uploadBookFile(file);
 });
 
-async function translateCurrentPage() {
+async function translateCurrentPage(mode = "visible") {
   if (!state.rendition) return;
   const cfi = currentLocationKey();
   const translationKey = `${state.activeBookId}|${cfi}|${els.languageInput.value.trim()}|${levels[Number(els.thresholdSlider.value)]}`;
   if (tryApplyCachedTranslation(translationKey)) {
+    state.bootstrapBurstPending = false;
     state.lastAppliedKey = translationKey;
     els.statusText.textContent = "Page translated (cached).";
     return;
@@ -148,15 +141,30 @@ async function translateCurrentPage() {
     els.statusText.textContent = "No translatable text on current page.";
     return;
   }
-  els.statusText.textContent = "Translating page in one request...";
+  const cacheMiss = !state.translationCache.has(translationKey);
+  const useBootstrapBurst = mode === "visible" && (state.bootstrapBurstPending || cacheMiss);
+  els.statusText.textContent = useBootstrapBurst
+    ? `Fast startup translate (parallel x${BOOST_PARALLEL})...`
+    : "Translating page in one request...";
   if (state.translateController) {
     state.translateController.abort();
   }
   state.translateController = new AbortController();
   const controller = state.translateController;
+
+  if (useBootstrapBurst) {
+    const ok = await translatePageParallelBurst(nodes, controller.signal, cfi, translationKey, BOOST_PARALLEL);
+    if (!ok) return;
+    state.bootstrapBurstPending = false;
+    state.suppressAutoTranslateUntil = Date.now() + 2500;
+    state.lastAppliedKey = translationKey;
+    els.statusText.textContent = "Page translated (fast burst).";
+    return;
+  }
+
   const delimiter = "<<<NODE_BREAK_V1>>>";
   const separator = `\n${delimiter}\n`;
-  const combined = nodes.map((n) => (n.nodeValue || "").trim()).join(separator);
+  const combined = nodes.map((n) => (n.nodeValue || "")).join(separator);
   const translatedCombined = await translateChunkText(combined, controller.signal, delimiter);
   if (translatedCombined == null) return;
   if (cfi !== currentLocationKey()) return;
@@ -167,7 +175,7 @@ async function translateCurrentPage() {
     const strict = translatedCombined.split(separator);
     if (strict.length === nodes.length) {
       applyTranslatedParts(nodes, strict);
-      cacheTranslatedPage(translationKey, strict.map((x) => (x || "").trim()));
+      cacheTranslatedPage(translationKey, strict.map((x) => (x || "")));
       state.suppressAutoTranslateUntil = Date.now() + 2500;
       state.lastAppliedKey = translationKey;
       els.statusText.textContent = "Page translated.";
@@ -183,6 +191,63 @@ async function translateCurrentPage() {
   state.suppressAutoTranslateUntil = Date.now() + 2500;
   state.lastAppliedKey = translationKey;
   els.statusText.textContent = "Page translated.";
+}
+
+async function translatePageParallelBurst(nodes, signal, cfi, translationKey, parallel = 10) {
+  const { chunks, units } = buildSentenceChunksForPage(nodes, 10);
+  if (!chunks.length) return false;
+  const n = chunks.length;
+  const translatedUnits = new Array(units.length);
+  let nextIdx = 0;
+  let done = 0;
+
+  async function worker() {
+    while (true) {
+      if (signal.aborted) return false;
+      const i = nextIdx++;
+      if (i >= n) return true;
+      if (cfi !== currentLocationKey()) return false;
+      const chunk = chunks[i];
+      const delimiter = "<<<SENT_BREAK_V1>>>";
+      const separator = `\n${delimiter}\n`;
+      const src = chunk.units.map((u) => u.text).join(separator);
+      const out = await translateChunkText(src, signal, delimiter);
+      if (out == null) return false;
+      let parts = splitByDelimiterLoose(out, delimiter);
+      if (parts.length !== chunk.units.length) {
+        const strict = out.split(separator);
+        if (strict.length === chunk.units.length) {
+          parts = strict;
+        } else {
+          // Fallback: keep original unit texts if model broke delimiters.
+          parts = chunk.units.map((u) => u.text);
+        }
+      }
+      for (let k = 0; k < chunk.units.length; k++) {
+        const u = chunk.units[k];
+        const v = (parts[k] || "");
+        translatedUnits[u.unitIdx] = v || u.text;
+      }
+      done++;
+      els.statusText.textContent = `Fast startup translate... (${done}/${n})`;
+    }
+  }
+
+  const workers = [];
+  const wCount = Math.max(1, Math.min(parallel, n));
+  for (let i = 0; i < wCount; i++) workers.push(worker());
+  const results = await Promise.all(workers);
+  if (results.some((x) => x === false)) return false;
+  if (cfi !== currentLocationKey()) return false;
+
+  const cached = applyTranslatedUnitsToNodes(nodes, units, translatedUnits);
+  cacheTranslatedPage(translationKey, cached);
+  return true;
+}
+
+// Background preload path: always single request (no turbo burst).
+async function preloadCurrentPage() {
+  return translateCurrentPage("preload");
 }
 
 function currentUser() {
@@ -223,11 +288,12 @@ function renderBookList() {
   for (const b of state.books) {
     const li = document.createElement("li");
     li.className = "bookItem";
+    const displayName = b.display_name || b.title || b.file_name;
 
     const openBtn = document.createElement("button");
     openBtn.className = "bookOpenBtn";
-    openBtn.textContent = b.display_name || b.title || b.file_name;
-    openBtn.addEventListener("click", () => openBook(b.id, b.file_name));
+    openBtn.textContent = displayName;
+    openBtn.addEventListener("click", () => openBook(b.id, displayName));
 
     const right = document.createElement("div");
     right.className = "bookMeta";
@@ -340,6 +406,7 @@ async function openBook(bookId, title) {
 
         const key = currentTranslationKey();
         if (tryApplyCachedTranslation(key)) {
+          state.bootstrapBurstPending = false;
           state.lastAppliedKey = key;
           els.statusText.textContent = "Page translated (cached).";
           return;
@@ -347,7 +414,7 @@ async function openBook(bookId, title) {
         // Auto-translate only when user explicitly navigated recently (or on first open).
         if (els.autoTranslateToggle.checked && (navigatedRecently || state.userNavigatedAt === 0)) {
           scheduleAutoTranslate();
-        } else {
+        } else if (!els.autoTranslateToggle.checked) {
           els.statusText.textContent = "Auto translate is off.";
         }
       }, 80);
@@ -387,10 +454,12 @@ async function openBook(bookId, title) {
     state.lastCfi = currentLocationKey();
     const key = currentTranslationKey();
     if (tryApplyCachedTranslation(key)) {
+      state.bootstrapBurstPending = false;
       state.lastAppliedKey = key;
       els.statusText.textContent = "Page translated (cached).";
     } else if (els.autoTranslateToggle.checked) {
       state.userNavigatedAt = 0;
+      state.bootstrapBurstPending = true;
       scheduleAutoTranslate(200);
     } else {
       els.statusText.textContent = "Book opened. Auto translate is off.";
@@ -474,7 +543,7 @@ function scheduleAutoTranslate(delay = 700) {
   const runId = ++state.translateRunId;
   state.autoTranslateTimer = setTimeout(async () => {
     if (runId !== state.translateRunId) return;
-    await translateCurrentPage();
+    await translateCurrentPage("visible");
   }, delay);
 }
 
@@ -748,17 +817,81 @@ function escapeRegExp(s) {
 }
 
 function splitByDelimiterLoose(text, delimiter) {
-  const re = new RegExp(`\\s*${escapeRegExp(delimiter)}\\s*`, "g");
+  const re = new RegExp(`(?:\\r?\\n)?${escapeRegExp(delimiter)}(?:\\r?\\n)?`, "g");
   return text.split(re);
 }
 
 function applyTranslatedParts(nodes, parts) {
   const cached = [];
   for (let i = 0; i < nodes.length; i++) {
-    const t = (parts[i] || "").trim();
-    if (t) {
+    const t = (parts[i] || "");
+    if (t.length > 0) {
       nodes[i].nodeValue = t;
       cached.push(t);
+    } else {
+      cached.push(nodes[i].nodeValue || "");
+    }
+  }
+  return cached;
+}
+
+function splitSentencesKeepWhitespace(text) {
+  const out = [];
+  const re = /[^.!?…]+(?:[.!?…]+)?\s*/g;
+  const matches = text.match(re);
+  if (!matches) return [text];
+  for (const m of matches) {
+    if (m) out.push(m);
+  }
+  return out.length ? out : [text];
+}
+
+function buildSentenceChunksForPage(nodes, desiredChunks = 10) {
+  const units = [];
+  let totalChars = 0;
+
+  for (let nodeIdx = 0; nodeIdx < nodes.length; nodeIdx++) {
+    const raw = nodes[nodeIdx].nodeValue || "";
+    const sentences = splitSentencesKeepWhitespace(raw);
+    for (const s of sentences) {
+      const t = s;
+      if (!t || !t.trim()) continue;
+      const unitIdx = units.length;
+      units.push({ unitIdx, nodeIdx, text: t });
+      totalChars += t.length;
+    }
+  }
+  if (!units.length) return { chunks: [], units: [] };
+
+  const targetChars = Math.max(240, Math.min(1200, Math.round(totalChars / Math.max(1, desiredChunks))));
+  const chunks = [];
+  let cur = [];
+  let curChars = 0;
+  for (const u of units) {
+    if (cur.length && curChars >= targetChars) {
+      chunks.push({ units: cur });
+      cur = [];
+      curChars = 0;
+    }
+    cur.push(u);
+    curChars += u.text.length;
+  }
+  if (cur.length) chunks.push({ units: cur });
+  return { chunks, units };
+}
+
+function applyTranslatedUnitsToNodes(nodes, units, translatedUnits) {
+  const byNode = new Array(nodes.length).fill("").map(() => []);
+  for (const u of units) {
+    const t = translatedUnits[u.unitIdx];
+    byNode[u.nodeIdx].push((t || u.text));
+  }
+  const cached = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const merged = byNode[i].join("");
+    if (merged) {
+      nodes[i].nodeValue = merged;
+      cached.push(merged);
     } else {
       cached.push(nodes[i].nodeValue || "");
     }
