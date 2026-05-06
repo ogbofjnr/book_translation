@@ -2,6 +2,8 @@
 
 New standalone localhost MVP for live EPUB reading + on-demand page annotation.
 
+![Reader UI screenshot](docs/reader-screenshot.png)
+
 ## Features (MVP)
 
 - Upload and list EPUB books per user (`?user=...`).
